@@ -50,27 +50,28 @@ class TechnicalAnalysis:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
         # RSI
-        self.indicators['RSI'] = self.calculate_rsi(df['close'])
+        rsi_series = self.calculate_rsi(df['close'])
+        self.indicators['RSI'] = float(rsi_series.iloc[-1])
 
         # MACD
         macd, signal = self.calculate_macd(df['close'])
-        self.indicators['MACD'] = macd
-        self.indicators['MACD_Signal'] = signal
-        self.indicators['MACD_Hist'] = macd - signal
+        self.indicators['MACD'] = float(macd.iloc[-1])
+        self.indicators['MACD_Signal'] = float(signal.iloc[-1])
+        self.indicators['MACD_Hist'] = float(macd.iloc[-1] - signal.iloc[-1])
 
         # Bandes de Bollinger
         bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(df['close'])
-        self.indicators['BB_Upper'] = bb_upper
-        self.indicators['BB_Middle'] = bb_middle
-        self.indicators['BB_Lower'] = bb_lower
+        self.indicators['BB_upper'] = float(bb_upper.iloc[-1])
+        self.indicators['BB_middle'] = float(bb_middle.iloc[-1])
+        self.indicators['BB_lower'] = float(bb_lower.iloc[-1])
 
         # Moyennes Mobiles
-        self.indicators['SMA_20'] = self.calculate_sma(df['close'], 20)
-        self.indicators['EMA_20'] = self.calculate_ema(df['close'], 20)
+        self.indicators['SMA_20'] = float(self.calculate_sma(df['close'], 20).iloc[-1])
+        self.indicators['EMA_20'] = float(self.calculate_ema(df['close'], 20).iloc[-1])
 
         return self.indicators
 
-    def get_signals(self, df: pd.DataFrame) -> Dict[str, str]:
+    def get_signals(self, df: pd.DataFrame) -> Dict[str, bool]:
         """
         Génère des signaux de trading basés sur les indicateurs
         :param df: DataFrame avec les données OHLCV
@@ -80,24 +81,17 @@ class TechnicalAnalysis:
         signals = {}
         
         # Signal RSI
-        last_rsi = indicators['RSI'].iloc[-1]
-        signals['RSI'] = 'Survente' if last_rsi < 30 else 'Surachat' if last_rsi > 70 else 'Neutre'
+        signals['RSI_OVERSOLD'] = indicators['RSI'] < 30
+        signals['RSI_OVERBOUGHT'] = indicators['RSI'] > 70
 
         # Signal MACD
-        last_macd = indicators['MACD'].iloc[-1]
-        last_signal = indicators['MACD_Signal'].iloc[-1]
-        signals['MACD'] = 'Achat' if last_macd > last_signal else 'Vente'
+        signals['MACD_BULLISH'] = indicators['MACD'] > indicators['MACD_Signal']
+        signals['MACD_BEARISH'] = indicators['MACD'] < indicators['MACD_Signal']
 
         # Signal Bollinger
         last_close = float(df['close'].iloc[-1])
-        last_bb_upper = indicators['BB_Upper'].iloc[-1]
-        last_bb_lower = indicators['BB_Lower'].iloc[-1]
-        if last_close > last_bb_upper:
-            signals['BB'] = 'Surachat'
-        elif last_close < last_bb_lower:
-            signals['BB'] = 'Survente'
-        else:
-            signals['BB'] = 'Neutre'
+        signals['BB_UPPER_CROSS'] = last_close > indicators['BB_upper']
+        signals['BB_LOWER_CROSS'] = last_close < indicators['BB_lower']
 
         return signals
 
@@ -114,12 +108,27 @@ class TechnicalAnalysis:
         summary.append(f"Prix actuel: {df['close'].iloc[-1]:.2f}")
         
         # Analyse RSI
-        summary.append(f"RSI: {signals['RSI']}")
+        if signals['RSI_OVERSOLD']:
+            summary.append("RSI: Survente")
+        elif signals['RSI_OVERBOUGHT']:
+            summary.append("RSI: Surachat")
+        else:
+            summary.append("RSI: Neutre")
         
         # Analyse MACD
-        summary.append(f"MACD: Signal de {signals['MACD']}")
+        if signals['MACD_BULLISH']:
+            summary.append("MACD: Signal d'achat")
+        elif signals['MACD_BEARISH']:
+            summary.append("MACD: Signal de vente")
+        else:
+            summary.append("MACD: Neutre")
         
         # Analyse Bandes de Bollinger
-        summary.append(f"Bandes de Bollinger: {signals['BB']}")
+        if signals['BB_UPPER_CROSS']:
+            summary.append("Bandes de Bollinger: Surachat")
+        elif signals['BB_LOWER_CROSS']:
+            summary.append("Bandes de Bollinger: Survente")
+        else:
+            summary.append("Bandes de Bollinger: Neutre")
         
         return "\n".join(summary)
