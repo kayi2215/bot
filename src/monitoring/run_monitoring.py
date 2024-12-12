@@ -1,5 +1,5 @@
 import threading
-from api_monitor import APIMonitor
+from src.monitoring.api_monitor import APIMonitor
 import time
 import logging
 import signal

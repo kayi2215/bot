@@ -93,23 +93,22 @@ class MongoDBManager:
         self.api_metrics.create_index([("timestamp", DESCENDING)])
         self.api_metrics.create_index([("endpoint", ASCENDING), ("metric_type", ASCENDING), ("timestamp", DESCENDING)])
 
-    def store_market_data(self, symbol: str, data: Dict[str, Any]):
-        """
-        Stocke les données de marché
-        :param symbol: Symbole de la paire de trading
-        :param data: Données à stocker
-        """
-        try:
-            document = {
-                "symbol": symbol,
-                "timestamp": datetime.now(),
-                "data": data
-            }
-            self.market_data.insert_one(document)
-            self.logger.debug(f"Stored market data for {symbol}")
-        except Exception as e:
-            self.logger.error(f"Error storing market data: {str(e)}")
-            raise
+    def store_market_data(self, symbol, data):
+        """Stocke les données de marché dans MongoDB"""
+        if not data:
+            raise ValueError("Les données ne peuvent pas être vides")
+            
+        document = {
+            "symbol": symbol,
+            "data": {
+                "price": data.get("price", 0.0),
+                "volume": data.get("volume", 0.0)
+            },
+            "timestamp": datetime.now()
+        }
+        
+        self.market_data.insert_one(document)
+        return document
 
     def store_indicators(self, symbol: str, indicators: Dict[str, Any]):
         """
@@ -187,7 +186,6 @@ class MongoDBManager:
             if not data_list:
                 return
             
-            # Validate and prepare documents
             documents = []
             for data in data_list:
                 if not isinstance(data, dict) or 'symbol' not in data or 'data' not in data:
@@ -195,12 +193,11 @@ class MongoDBManager:
                 
                 document = {
                     "symbol": data['symbol'],
-                    "timestamp": datetime.now(),
-                    "data": data['data']
+                    "data": data['data'],
+                    "timestamp": datetime.now()
                 }
                 documents.append(document)
             
-            # Insert documents
             self.market_data.insert_many(documents)
             self.logger.debug(f"Stored {len(documents)} market data records")
         except Exception as e:
@@ -271,10 +268,11 @@ class MongoDBManager:
             cursor = self.market_data.find(
                 {"symbol": symbol}
             ).sort("timestamp", DESCENDING).limit(limit)
+            
             return list(cursor)
         except Exception as e:
             self.logger.error(f"Error retrieving market data: {str(e)}")
-            raise
+            return []
 
     def get_latest_indicators(self, symbol: str, limit: int = 1) -> List[Dict[str, Any]]:
         """
@@ -403,18 +401,30 @@ class MongoDBManager:
         try:
             cutoff_date = datetime.now() - timedelta(days=days_to_keep)
             
-            # Nettoyer les différentes collections
-            collections = [
-                self.market_data,
-                self.indicators,
-                self.monitoring,
-                self.api_metrics
-            ]
-            
-            for collection in collections:
-                result = collection.delete_many({"timestamp": {"$lt": cutoff_date}})
-                self.logger.info(f"Deleted {result.deleted_count} old records from {collection.name}")
+            # Si days_to_keep est 0, on supprime toutes les données
+            if days_to_keep == 0:
+                self.market_data.delete_many({})
+                self.indicators.delete_many({})
+                self.trades.delete_many({})
+                self.monitoring.delete_many({})
+                self.api_metrics.delete_many({})
+            else:
+                # Nettoyage des données de marché
+                self.market_data.delete_many({"timestamp": {"$lt": cutoff_date}})
                 
+                # Nettoyage des indicateurs
+                self.indicators.delete_many({"timestamp": {"$lt": cutoff_date}})
+                
+                # Nettoyage des transactions
+                self.trades.delete_many({"timestamp": {"$lt": cutoff_date}})
+                
+                # Nettoyage des données de monitoring
+                self.monitoring.delete_many({"timestamp": {"$lt": cutoff_date}})
+                
+                # Nettoyage des métriques d'API
+                self.api_metrics.delete_many({"timestamp": {"$lt": cutoff_date}})
+            
+            self.logger.info(f"Cleaned up data older than {days_to_keep} days")
         except Exception as e:
             self.logger.error(f"Error cleaning up old data: {str(e)}")
             raise

@@ -31,11 +31,15 @@ class MarketDataCollector:
 
     def get_current_price(self, symbol: str) -> Dict[str, float]:
         try:
+            # Récupérer le ticker et les statistiques 24h
             ticker = self.client.get_symbol_ticker(symbol=symbol)
+            stats = self.client.get_ticker(symbol=symbol)
+            
             self.logger.info(f"Retrieved price for {symbol}: {ticker['price']}")
             return {
                 'symbol': symbol,
-                'price': float(ticker['price']),
+                'last_price': float(ticker['price']),
+                'volume_24h': float(stats['volume']),
                 'timestamp': datetime.now().timestamp()
             }
         except BinanceAPIException as e:

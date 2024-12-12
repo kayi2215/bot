@@ -14,9 +14,12 @@ class TestMarketDataCollector(unittest.TestCase):
         price_data = self.collector.get_current_price(self.symbol)
         
         self.assertIsInstance(price_data, dict)
-        self.assertIn('price', price_data)
-        self.assertIsInstance(price_data['price'], float)
-        self.assertGreater(price_data['price'], 0)
+        self.assertIn('last_price', price_data)
+        self.assertIn('volume_24h', price_data)
+        self.assertIsInstance(price_data['last_price'], float)
+        self.assertIsInstance(price_data['volume_24h'], float)
+        self.assertGreater(price_data['last_price'], 0)
+        self.assertGreater(price_data['volume_24h'], 0)
 
     def test_get_klines(self):
         """Test de la récupération des données historiques"""
@@ -63,14 +66,20 @@ class TestMarketDataCollector(unittest.TestCase):
         self.assertIn('current_price', market_analysis)
         self.assertIn('technical_analysis', market_analysis)
         self.assertIn('order_book', market_analysis)
+        self.assertIn('timestamp', market_analysis)
 
+        # Vérification du prix actuel
         self.assertIsInstance(market_analysis['current_price'], dict)
-        self.assertIn('price', market_analysis['current_price'])
+        self.assertIn('last_price', market_analysis['current_price'])
+        self.assertIn('volume_24h', market_analysis['current_price'])
 
+        # Vérification de l'analyse technique
         self.assertIsInstance(market_analysis['technical_analysis'], dict)
-        self.assertIn('last_update', market_analysis['technical_analysis'])
+        self.assertIn('indicators', market_analysis['technical_analysis'])
+        self.assertIn('signals', market_analysis['technical_analysis'])
         self.assertIn('summary', market_analysis['technical_analysis'])
 
+        # Vérification du carnet d'ordres
         self.assertIsInstance(market_analysis['order_book'], dict)
         self.assertIn('bids', market_analysis['order_book'])
         self.assertIn('asks', market_analysis['order_book'])

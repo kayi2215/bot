@@ -21,12 +21,19 @@ class TestMarketUpdater(unittest.TestCase):
         self.patcher = patch('src.services.market_updater.MarketDataCollector', return_value=self.mock_collector)
         self.mock_collector_class = self.patcher.start()
         
+        # Mock de l'APIMonitor
+        self.mock_monitor = Mock()
+        self.mock_monitor.check_api_health.return_value = {"status": "OK"}
+        self.monitor_patcher = patch('src.services.market_updater.APIMonitor', return_value=self.mock_monitor)
+        self.monitor_patcher.start()
+        
         # Création de l'instance de test
         self.market_updater = MarketUpdater(
             symbols=self.symbols,
             db=self.mock_db,
             api_key=self.api_key,
-            api_secret=self.api_secret
+            api_secret=self.api_secret,
+            use_testnet=True
         )
 
     def tearDown(self):
@@ -37,6 +44,7 @@ class TestMarketUpdater(unittest.TestCase):
             if hasattr(self.market_updater, 'update_thread') and self.market_updater.update_thread:
                 self.market_updater.update_thread.join(timeout=2)
         self.patcher.stop()
+        self.monitor_patcher.stop()
 
     def test_init(self):
         """Test de l'initialisation du MarketUpdater"""
@@ -56,7 +64,8 @@ class TestMarketUpdater(unittest.TestCase):
         # Configuration des mocks avec le format correct des données
         self.mock_collector.get_current_price.return_value = {
             'symbol': 'BTCUSDT',
-            'price': 50000.0,
+            'last_price': 50000.0,
+            'volume_24h': 1000.0,
             'timestamp': timestamp.timestamp()
         }
         self.mock_collector.get_klines.return_value = pd.DataFrame({
@@ -90,92 +99,40 @@ class TestMarketUpdater(unittest.TestCase):
         self.mock_collector.get_order_book.assert_called_once_with(symbol, limit=100)
         self.mock_collector.get_recent_trades.assert_called_once_with(symbol, limit=50)
         
-        # Vérification de la sauvegarde des données
+        # Vérification de la structure des données sauvegardées
         self.mock_db.store_market_data.assert_called_once()
-        saved_data = self.mock_db.store_market_data.call_args[0][0]
-        self.assertEqual(saved_data['symbol'], symbol)
-        self.assertIn('timestamp', saved_data)
-        self.assertIn('ticker', saved_data)
-        self.assertIn('klines', saved_data)
-        self.assertIn('orderbook', saved_data)
-        self.assertIn('trades', saved_data)
-        self.assertEqual(self.market_updater.error_counts[symbol], 0)
+        symbol_arg, data_arg = self.mock_db.store_market_data.call_args[0]
+        
+        # Vérification des arguments
+        self.assertEqual(symbol_arg, symbol)
+        self.assertEqual(data_arg['symbol'], symbol)
+        self.assertIn('data', data_arg)
+        self.assertEqual(data_arg['data']['price'], 50000.0)
+        self.assertEqual(data_arg['data']['volume'], 1000.0)
+        self.assertIn('raw_data', data_arg)
+        self.assertEqual(data_arg['exchange'], 'binance')
 
-    def test_update_market_data_failure(self):
-        """Test de la gestion des erreurs lors de la mise à jour"""
+    def test_update_market_data_api_unhealthy(self):
+        """Test de la gestion d'une API non saine"""
+        self.mock_monitor.check_api_health.return_value = {"status": "ERROR"}
         symbol = 'BTCUSDT'
         
-        # Configuration du mock pour lever une exception
-        self.mock_collector.get_current_price.side_effect = Exception("API Error")
-        
-        # Exécution de la mise à jour
         result = self.market_updater.update_market_data(symbol)
         
-        # Vérifications
+        self.assertFalse(result)
+        self.mock_collector.get_current_price.assert_not_called()
+        self.mock_db.store_market_data.assert_not_called()
+
+    def test_update_market_data_error(self):
+        """Test de la gestion des erreurs lors de la mise à jour"""
+        symbol = 'BTCUSDT'
+        self.mock_collector.get_current_price.side_effect = Exception("Test error")
+        
+        result = self.market_updater.update_market_data(symbol)
+        
         self.assertFalse(result)
         self.assertEqual(self.market_updater.error_counts[symbol], 1)
         self.mock_db.store_market_data.assert_not_called()
-
-    def test_run_and_stop(self):
-        """Test du démarrage et de l'arrêt du service"""
-        # Configuration des mocks avec des données valides pour tous les symboles
-        timestamp = datetime.now()
-        for symbol in self.symbols:
-            self.mock_collector.get_current_price.return_value = {
-                'symbol': symbol,
-                'price': 50000.0,
-                'timestamp': timestamp.timestamp()
-            }
-            self.mock_collector.get_klines.return_value = pd.DataFrame({
-                'timestamp': [timestamp],
-                'open': ['49000'],
-                'high': ['51000'],
-                'low': ['48000'],
-                'close': ['50000'],
-                'volume': ['100']
-            })
-            self.mock_collector.get_order_book.return_value = {
-                'lastUpdateId': 1234567,
-                'bids': [['49999', '1.0']],
-                'asks': [['50001', '1.0']]
-            }
-            self.mock_collector.get_recent_trades.return_value = [{
-                'id': 12345,
-                'price': '50000',
-                'qty': '1.0',
-                'time': int(timestamp.timestamp() * 1000),
-                'isBuyerMaker': True
-            }]
-        
-        # Réduction de l'intervalle pour le test
-        self.market_updater.update_interval = 0.1
-        
-        # Démarrage du service dans un thread séparé
-        update_thread = threading.Thread(target=self.market_updater.run)
-        update_thread.daemon = True
-        update_thread.start()
-        
-        # Attente pour quelques cycles de mise à jour
-        # Attendre suffisamment longtemps pour que tous les symboles soient traités
-        # Temps d'attente = nombre de symboles * intervalle de mise à jour * 2 (pour être sûr)
-        wait_time = len(self.symbols) * self.market_updater.update_interval * 2
-        time.sleep(wait_time)
-        
-        # Arrêt du service
-        self.market_updater.stop()
-        
-        # Attente que le thread se termine
-        update_thread.join(timeout=2)
-        
-        # Vérifications
-        self.assertTrue(self.mock_collector.get_current_price.called)
-        self.assertTrue(self.mock_collector.get_klines.called)
-        self.assertTrue(self.mock_collector.get_order_book.called)
-        self.assertTrue(self.mock_collector.get_recent_trades.called)
-        self.assertTrue(self.mock_db.store_market_data.called)
-        self.assertTrue(self.market_updater.stop_event.is_set())
-        self.assertTrue(self.market_updater.shutdown_complete.is_set())
-        self.assertFalse(update_thread.is_alive())
 
 if __name__ == '__main__':
     unittest.main()

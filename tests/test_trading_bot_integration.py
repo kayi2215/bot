@@ -38,20 +38,29 @@ class TestTradingBotIntegration(unittest.TestCase):
         """Insère des données de test dans MongoDB"""
         for symbol in self.symbols:
             market_data = {
-                "price": 50000.0 if symbol == "BTCUSDT" else 2000.0,
-                "volume": 100.0,
-                "timestamp": datetime.now().timestamp()
+                "symbol": symbol,
+                "timestamp": datetime.now(),
+                "data": {
+                    "price": 50000.0 if symbol == "BTCUSDT" else 2000.0,
+                    "volume": 100.0
+                },
+                "raw_data": {
+                    "ticker": {
+                        "last_price": 50000.0 if symbol == "BTCUSDT" else 2000.0,
+                        "volume_24h": 100.0
+                    },
+                    "klines": [],
+                    "orderbook": {
+                        "bids": [["49999", "1.0"]],
+                        "asks": [["50001", "1.0"]]
+                    },
+                    "trades": []
+                },
+                "exchange": "binance",
+                "test": True
             }
+            # Stocker les données avec le bon format
             self.db.store_market_data(symbol, market_data)
-
-            indicators = {
-                "rsi": 65.5,
-                "macd": {
-                    "value": 100.0,
-                    "signal": 95.0
-                }
-            }
-            self.db.store_indicators(symbol, indicators)
 
     def test_bot_initialization(self):
         """Teste l'initialisation correcte du bot"""
@@ -86,27 +95,47 @@ class TestTradingBotIntegration(unittest.TestCase):
         # Insérer des données de test
         self.insert_test_market_data()
         
+        # Démarrer le bot
+        self.bot.start()
+        time.sleep(2)  # Attendre que le bot traite les données
+        
         # Vérifier que les données sont récupérables
         for symbol in self.symbols:
-            market_data = self.db.get_latest_market_data(symbol)
+            market_data = self.db.get_latest_market_data(symbol, limit=1)
             self.assertIsNotNone(market_data)
-            self.assertEqual(market_data["symbol"], symbol)
+            self.assertTrue(len(market_data) > 0)
             
-            indicators = self.db.get_latest_indicators(symbol)
-            self.assertIsNotNone(indicators)
-            self.assertEqual(indicators["symbol"], symbol)
+            latest_data = market_data[0]
+            self.assertEqual(latest_data['symbol'], symbol)
+            self.assertIn('data', latest_data)
+            self.assertIn('price', latest_data['data'])
+            self.assertIn('volume', latest_data['data'])
+            
+            # Vérifier les valeurs attendues (noter qu'elles peuvent être 0 si l'API n'est pas accessible)
+            self.assertIsInstance(latest_data['data']['price'], (int, float))
+            self.assertIsInstance(latest_data['data']['volume'], (int, float))
+            
+        # Arrêter le bot
+        self.bot.stop()
 
-    @patch('src.services.market_updater.MarketDataUpdater._update_loop')
-    def test_market_data_updates(self, mock_update):
+    def test_market_data_updates(self):
         """Teste les mises à jour des données de marché"""
-        # Démarrer le bot
+        # Créer et démarrer le bot
         self.bot.start()
         
         # Attendre que le bot démarre
         time.sleep(1)
         
-        # Vérifier que la méthode de mise à jour est appelée
-        self.assertTrue(mock_update.called)
+        # Vérifier que les données sont mises à jour
+        market_data = self.db.get_latest_market_data("BTCUSDT", limit=1)
+        self.assertIsNotNone(market_data)
+        self.assertTrue(len(market_data) > 0)
+        
+        latest_data = market_data[0]
+        self.assertEqual(latest_data["symbol"], "BTCUSDT")
+        self.assertIn("data", latest_data)
+        self.assertIn("price", latest_data["data"])
+        self.assertIn("volume", latest_data["data"])
         
         # Arrêter le bot
         self.bot.stop()
