@@ -16,9 +16,11 @@ class TestMarketDataUpdater(unittest.TestCase):
         )
 
     def tearDown(self):
-        """Nettoie après les tests"""
-        if self.updater.is_running:
+        """Nettoyage après chaque test"""
+        if hasattr(self, 'updater'):
             self.updater.stop()
+            if hasattr(self.updater, 'db'):
+                self.updater.db.close()
 
     @patch('src.services.market_updater.MarketDataCollector')
     @patch('src.services.market_updater.MongoDBManager')
@@ -85,6 +87,43 @@ class TestMarketDataUpdater(unittest.TestCase):
         
         # Vérifie que la vérification a été effectuée avec le bon endpoint
         mock_monitor_instance.check_api_health.assert_called_with("https://api.binance.com/api/v3/ping")
+
+    @patch('src.services.market_updater.MarketDataCollector')
+    @patch('src.services.market_updater.MongoDBManager')
+    def test_calculate_indicators(self, mock_db, mock_collector):
+        """Test le calcul des indicateurs techniques"""
+        symbol = "BTCUSDT"
+        
+        # Mock des données historiques
+        historical_data = [
+            {
+                "timestamp": datetime.now(),
+                "open": "50000",
+                "high": "51000", 
+                "low": "49000",
+                "close": "50500",
+                "volume": "100"
+            }
+        ]
+        
+        mock_collector.return_value.get_klines.return_value = historical_data
+        
+        # Test avec des données valides
+        result = self.updater._calculate_indicators(symbol, {})
+        
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["symbol"], symbol)
+        self.assertIn("timestamp", result)
+        self.assertIn("calculations", result)
+        
+        # Test avec aucune donnée historique
+        mock_collector.return_value.get_klines.return_value = []
+        result = self.updater._calculate_indicators(symbol, {})
+        
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["symbol"], symbol)
+        self.assertIn("timestamp", result)
+        self.assertEqual(result["calculations"], {})
 
     def test_service_control(self):
         """Teste le contrôle du service (démarrage/arrêt)"""

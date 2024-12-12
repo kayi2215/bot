@@ -167,26 +167,69 @@ class MarketDataUpdater:
             Dict contenant les indicateurs calculés
         """
         try:
-            # TODO: Implémenter le calcul des indicateurs
-            # Pour l'instant, retourne un dictionnaire vide
-            return {}
+            # Récupération des données historiques pour le calcul des indicateurs
+            historical_data = self.data_collector.get_klines(
+                symbol=symbol,
+                interval="1h",
+                limit=100
+            )
+            
+            if not historical_data or len(historical_data) == 0:
+                self.logger.warning(f"No historical data available for {symbol}")
+                return {
+                    "timestamp": datetime.now(),
+                    "symbol": symbol,
+                    "calculations": {}
+                }
+            
+            # TODO: Implémenter le calcul des indicateurs techniques
+            # Cette partie devrait être identique pour Bybit et Binance
+            indicators = {
+                "timestamp": datetime.now(),
+                "symbol": symbol,
+                "calculations": {}
+            }
+            
+            return indicators
             
         except Exception as e:
             self.logger.error(f"Error calculating indicators for {symbol}: {str(e)}")
-            return None
+            return {
+                "timestamp": datetime.now(),
+                "symbol": symbol,
+                "calculations": {}
+            }
 
     def get_latest_data(self, symbol: str) -> Dict[str, Any]:
         """
-        Récupère les dernières données pour un symbole
+        Récupère les dernières données de marché pour un symbole
         
         Args:
             symbol: Symbole de la paire de trading
             
         Returns:
-            Dict contenant les dernières données
+            Dict contenant les dernières données de marché
         """
         try:
-            return self.db.get_latest_market_data(symbol)
+            # Récupération des dernières données depuis MongoDB
+            latest_data = self.db.get_latest_market_data(symbol)
+            
+            if not latest_data:
+                self.logger.warning(f"No latest data found for {symbol}")
+                return {
+                    "symbol": symbol,
+                    "timestamp": datetime.now(),
+                    "price": None,
+                    "volume": None
+                }
+                
+            return latest_data
+            
         except Exception as e:
-            self.logger.error(f"Error retrieving latest data for {symbol}: {str(e)}")
-            return None
+            self.logger.error(f"Error getting latest data for {symbol}: {str(e)}")
+            return {
+                "symbol": symbol,
+                "timestamp": datetime.now(),
+                "price": None,
+                "volume": None
+            }
