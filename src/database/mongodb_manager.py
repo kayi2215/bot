@@ -169,7 +169,8 @@ class MongoDBManager:
         try:
             document = {
                 "strategy_name": strategy_name,
-                "config": config
+                "config": config,
+                "timestamp": datetime.now()
             }
             self.strategy_config.insert_one(document)
             self.logger.info(f"Stored strategy config for {strategy_name}")
@@ -199,158 +200,200 @@ class MongoDBManager:
                 }
                 documents.append(document)
             
-            # Insert documents in bulk
-            result = self.market_data.insert_many(documents)
-            self.logger.info(f"Stored {len(result.inserted_ids)} market data documents")
+            # Insert documents
+            self.market_data.insert_many(documents)
+            self.logger.debug(f"Stored {len(documents)} market data records")
         except Exception as e:
-            self.logger.error(f"Error storing market data in bulk: {str(e)}")
+            self.logger.error(f"Error storing market data bulk: {str(e)}")
             raise
 
-    def store_indicators_bulk(self, indicators_list: List[Dict[str, Any]]):
+    def store_indicators_bulk(self, data_list: List[Dict[str, Any]]):
         """
         Stocke plusieurs indicateurs en une seule opération
-        :param indicators_list: Liste des indicateurs à stocker
+        :param data_list: Liste des indicateurs à stocker
         """
         try:
-            if not indicators_list:
+            if not data_list:
                 return
             
-            # Validate and prepare documents
             documents = []
-            for indicators in indicators_list:
-                if not isinstance(indicators, dict) or 'symbol' not in indicators or 'indicators' not in indicators:
+            for data in data_list:
+                if not isinstance(data, dict) or 'symbol' not in data or 'indicators' not in data:
                     raise ValueError("Invalid indicators format")
                 
                 document = {
-                    "symbol": indicators['symbol'],
+                    "symbol": data['symbol'],
                     "timestamp": datetime.now(),
-                    "indicators": indicators['indicators']
+                    "indicators": data['indicators']
                 }
                 documents.append(document)
             
-            # Insert documents in bulk
-            result = self.indicators.insert_many(documents)
-            self.logger.info(f"Stored {len(result.inserted_ids)} indicators documents")
+            self.indicators.insert_many(documents)
+            self.logger.debug(f"Stored {len(documents)} indicator records")
         except Exception as e:
-            self.logger.error(f"Error storing indicators in bulk: {str(e)}")
+            self.logger.error(f"Error storing indicators bulk: {str(e)}")
             raise
 
-    def store_monitoring_data(self, monitoring_data: Dict[str, Any]):
+    def store_monitoring_data(self, data: Dict[str, Any]):
         """
         Stocke les données de monitoring
-        :param monitoring_data: Données de monitoring à stocker
+        :param data: Données de monitoring à stocker
         """
         try:
-            monitoring_data["timestamp"] = datetime.now()
-            self.monitoring.insert_one(monitoring_data)
-            self.logger.debug(f"Stored monitoring data for endpoint {monitoring_data.get('endpoint')}")
+            data["timestamp"] = datetime.now()
+            self.monitoring.insert_one(data)
+            self.logger.debug("Stored monitoring data")
         except Exception as e:
             self.logger.error(f"Error storing monitoring data: {str(e)}")
             raise
 
-    def store_api_metrics(self, metric_data: Dict[str, Any]):
+    def store_api_metric(self, metric_data: Dict[str, Any]):
         """
-        Stocke les métriques de l'API
-        :param metric_data: Données de métriques à stocker
+        Stocke une métrique d'API
+        :param metric_data: Données de la métrique à stocker
         """
         try:
             metric_data["timestamp"] = datetime.now()
             self.api_metrics.insert_one(metric_data)
-            self.logger.debug(f"Stored API metrics for endpoint {metric_data.get('endpoint')}")
+            self.logger.debug(f"Stored API metric for {metric_data.get('endpoint')}")
         except Exception as e:
-            self.logger.error(f"Error storing API metrics: {str(e)}")
+            self.logger.error(f"Error storing API metric: {str(e)}")
             raise
 
-    def get_latest_market_data(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_latest_market_data(self, symbol: str, limit: int = 1) -> List[Dict[str, Any]]:
         """
         Récupère les dernières données de marché pour un symbole
         :param symbol: Symbole de la paire de trading
-        :return: Dernières données de marché
+        :param limit: Nombre de documents à récupérer
+        :return: Liste des données de marché
         """
         try:
-            data = self.market_data.find_one(
-                {"symbol": symbol},
-                sort=[("timestamp", DESCENDING)]
-            )
-            return data
+            cursor = self.market_data.find(
+                {"symbol": symbol}
+            ).sort("timestamp", DESCENDING).limit(limit)
+            return list(cursor)
         except Exception as e:
             self.logger.error(f"Error retrieving market data: {str(e)}")
-            return None
+            raise
 
-    def get_historical_data(self, symbol: str, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
+    def get_latest_indicators(self, symbol: str, limit: int = 1) -> List[Dict[str, Any]]:
         """
-        Récupère les données historiques pour une période donnée
+        Récupère les derniers indicateurs pour un symbole
         :param symbol: Symbole de la paire de trading
-        :param start_time: Début de la période
-        :param end_time: Fin de la période
-        :return: Liste des données historiques
+        :param limit: Nombre de documents à récupérer
+        :return: Liste des indicateurs
         """
         try:
-            query = {
-                "symbol": symbol,
+            cursor = self.indicators.find(
+                {"symbol": symbol}
+            ).sort("timestamp", DESCENDING).limit(limit)
+            return list(cursor)
+        except Exception as e:
+            self.logger.error(f"Error retrieving indicators: {str(e)}")
+            raise
+
+    def get_trades_by_timeframe(self, start_time: datetime, end_time: datetime = None) -> List[Dict[str, Any]]:
+        """
+        Récupère les transactions dans une période donnée
+        :param start_time: Début de la période
+        :param end_time: Fin de la période (par défaut: maintenant)
+        :return: Liste des transactions
+        """
+        try:
+            if end_time is None:
+                end_time = datetime.now()
+            
+            cursor = self.trades.find({
                 "timestamp": {
                     "$gte": start_time,
                     "$lte": end_time
                 }
-            }
-            return list(self.market_data.find(query).sort("timestamp", ASCENDING))
+            }).sort("timestamp", ASCENDING)
+            
+            return list(cursor)
         except Exception as e:
-            self.logger.error(f"Error retrieving historical data: {str(e)}")
-            return []
+            self.logger.error(f"Error retrieving trades: {str(e)}")
+            raise
 
-    def get_latest_indicators(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_latest_backtest_results(self, strategy_name: str, limit: int = 1) -> List[Dict[str, Any]]:
         """
-        Récupère les derniers indicateurs techniques pour un symbole
-        :param symbol: Symbole de la paire de trading
-        :return: Derniers indicateurs techniques
-        """
-        try:
-            data = self.indicators.find_one(
-                {"symbol": symbol},
-                sort=[("timestamp", DESCENDING)]
-            )
-            return data
-        except Exception as e:
-            self.logger.error(f"Error retrieving indicators: {str(e)}")
-            return None
-
-    def get_trades_history(self, symbol: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        Récupère l'historique des transactions
-        :param symbol: Symbole de la paire de trading (optionnel)
-        :param limit: Nombre maximum de transactions à récupérer
-        :return: Liste des transactions
-        """
-        try:
-            query = {"symbol": symbol} if symbol else {}
-            return list(self.trades.find(query).sort("timestamp", DESCENDING).limit(limit))
-        except Exception as e:
-            self.logger.error(f"Error retrieving trades history: {str(e)}")
-            return []
-
-    def get_backtest_results(self, strategy_name: str) -> List[Dict[str, Any]]:
-        """
-        Récupère les résultats des backtests pour une stratégie
+        Récupère les derniers résultats de backtest pour une stratégie
         :param strategy_name: Nom de la stratégie
-        :return: Liste des résultats des backtests
+        :param limit: Nombre de résultats à récupérer
+        :return: Liste des résultats de backtest
         """
         try:
-            return list(self.backtest_results.find({"strategy_name": strategy_name}).sort("timestamp", DESCENDING))
+            cursor = self.backtest_results.find(
+                {"strategy_name": strategy_name}
+            ).sort("timestamp", DESCENDING).limit(limit)
+            return list(cursor)
         except Exception as e:
             self.logger.error(f"Error retrieving backtest results: {str(e)}")
-            return []
+            raise
 
     def get_strategy_config(self, strategy_name: str) -> Optional[Dict[str, Any]]:
         """
         Récupère la configuration d'une stratégie
         :param strategy_name: Nom de la stratégie
-        :return: Configuration de la stratégie
+        :return: Configuration de la stratégie ou None si non trouvée
         """
         try:
             return self.strategy_config.find_one({"strategy_name": strategy_name})
         except Exception as e:
             self.logger.error(f"Error retrieving strategy config: {str(e)}")
-            return None
+            raise
+
+    def get_monitoring_data(self, start_time: datetime, end_time: datetime = None) -> List[Dict[str, Any]]:
+        """
+        Récupère les données de monitoring pour une période donnée
+        :param start_time: Début de la période
+        :param end_time: Fin de la période (par défaut: maintenant)
+        :return: Liste des données de monitoring
+        """
+        try:
+            if end_time is None:
+                end_time = datetime.now()
+            
+            cursor = self.monitoring.find({
+                "timestamp": {
+                    "$gte": start_time,
+                    "$lte": end_time
+                }
+            }).sort("timestamp", ASCENDING)
+            
+            return list(cursor)
+        except Exception as e:
+            self.logger.error(f"Error retrieving monitoring data: {str(e)}")
+            raise
+
+    def get_api_metrics(self, endpoint: str = None, metric_type: str = None, 
+                       start_time: datetime = None, end_time: datetime = None) -> List[Dict[str, Any]]:
+        """
+        Récupère les métriques d'API avec filtres optionnels
+        :param endpoint: Filtre par endpoint
+        :param metric_type: Filtre par type de métrique
+        :param start_time: Début de la période
+        :param end_time: Fin de la période
+        :return: Liste des métriques d'API
+        """
+        try:
+            query = {}
+            if endpoint:
+                query["endpoint"] = endpoint
+            if metric_type:
+                query["metric_type"] = metric_type
+            if start_time or end_time:
+                query["timestamp"] = {}
+                if start_time:
+                    query["timestamp"]["$gte"] = start_time
+                if end_time:
+                    query["timestamp"]["$lte"] = end_time
+            
+            cursor = self.api_metrics.find(query).sort("timestamp", ASCENDING)
+            return list(cursor)
+        except Exception as e:
+            self.logger.error(f"Error retrieving API metrics: {str(e)}")
+            raise
 
     def cleanup_old_data(self, days_to_keep: int = 30):
         """
@@ -360,25 +403,18 @@ class MongoDBManager:
         try:
             cutoff_date = datetime.now() - timedelta(days=days_to_keep)
             
-            # Nettoyer les données de marché
-            result = self.market_data.delete_many({"timestamp": {"$lt": cutoff_date}})
-            self.logger.info(f"Deleted {result.deleted_count} old market data documents")
+            # Nettoyer les différentes collections
+            collections = [
+                self.market_data,
+                self.indicators,
+                self.monitoring,
+                self.api_metrics
+            ]
             
-            # Nettoyer les indicateurs
-            result = self.indicators.delete_many({"timestamp": {"$lt": cutoff_date}})
-            self.logger.info(f"Deleted {result.deleted_count} old indicators documents")
-            
-            # Nettoyer les transactions
-            result = self.trades.delete_many({"timestamp": {"$lt": cutoff_date}})
-            self.logger.info(f"Deleted {result.deleted_count} old trades documents")
-            
-            # Nettoyer les résultats des backtests
-            result = self.backtest_results.delete_many({"timestamp": {"$lt": cutoff_date}})
-            self.logger.info(f"Deleted {result.deleted_count} old backtest results documents")
-            
-            # Force un délai pour s'assurer que les suppressions sont effectuées
-            time.sleep(0.5)
-            
+            for collection in collections:
+                result = collection.delete_many({"timestamp": {"$lt": cutoff_date}})
+                self.logger.info(f"Deleted {result.deleted_count} old records from {collection.name}")
+                
         except Exception as e:
             self.logger.error(f"Error cleaning up old data: {str(e)}")
             raise
