@@ -25,8 +25,10 @@ class TradingBot:
         self.market_data = MarketDataCollector(BINANCE_API_KEY, BINANCE_API_SECRET)
         self.monitoring_service = MonitoringService(check_interval=60)
         self.data_updater = MarketUpdater(
-            self.symbols,
-            self.db
+            symbols=self.symbols,
+            db=self.db,
+            api_key=BINANCE_API_KEY,
+            api_secret=BINANCE_API_SECRET
         )
         
         # État du bot
@@ -134,10 +136,32 @@ class TradingBot:
             # Log des informations importantes
             self.logger.info(f"Traitement des données pour {symbol}: Prix={current_price}, Volume={current_volume}")
             
-            # Accès aux données brutes si nécessaire
+            # Accès aux données brutes pour une analyse plus détaillée
             raw_data = market_data.get('raw_data', {})
+            ticker = raw_data.get('ticker', {})
+            klines = raw_data.get('klines', [])
+            orderbook = raw_data.get('orderbook', {})
+            trades = raw_data.get('trades', [])
             
-            # Logique de trading ici...
+            # Analyse des données brutes
+            if ticker:
+                self.logger.debug(f"Ticker data disponible pour {symbol}")
+            if klines:
+                self.logger.debug(f"Données historiques disponibles pour {symbol}: {len(klines)} klines")
+            if orderbook:
+                self.logger.debug(f"Carnet d'ordres disponible pour {symbol}")
+            if trades:
+                self.logger.debug(f"Trades récents disponibles pour {symbol}: {len(trades)} trades")
+            
+            # TODO: Implémenter la logique de trading basée sur les données brutes
+            self._analyze_and_trade(symbol, {
+                'price': current_price,
+                'volume': current_volume,
+                'ticker': ticker,
+                'klines': klines,
+                'orderbook': orderbook,
+                'trades': trades
+            })
             
         except KeyError as e:
             self.logger.error(f"Erreur lors du traitement des données: {str(e)}")
