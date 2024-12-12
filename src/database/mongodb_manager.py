@@ -25,6 +25,8 @@ class MongoDBManager:
         market_data_collection = os.getenv('MONGODB_COLLECTION_MARKET_DATA', 'market_data')
         indicators_collection = os.getenv('MONGODB_COLLECTION_INDICATORS', 'indicators')
         trades_collection = os.getenv('MONGODB_COLLECTION_TRADES', 'trades')
+        monitoring_collection = os.getenv('MONGODB_COLLECTION_MONITORING', 'monitoring')
+        api_metrics_collection = os.getenv('MONGODB_COLLECTION_API_METRICS', 'api_metrics')
         
         # Construction de l'URI MongoDB avec les identifiants
         mongodb_uri = f"mongodb://{mongodb_user}:{mongodb_password}@localhost:27017/"
@@ -56,6 +58,8 @@ class MongoDBManager:
         self.trades: Collection = self.db[trades_collection]
         self.backtest_results: Collection = self.db['backtest_results']
         self.strategy_config: Collection = self.db['strategy_config']
+        self.monitoring: Collection = self.db[monitoring_collection]
+        self.api_metrics: Collection = self.db[api_metrics_collection]
         
         # Création des index
         self._setup_indexes()
@@ -80,6 +84,14 @@ class MongoDBManager:
         
         # Index pour strategy_config
         self.strategy_config.create_index([("strategy_name", ASCENDING)])
+
+        # Index pour monitoring
+        self.monitoring.create_index([("timestamp", DESCENDING)])
+        self.monitoring.create_index([("endpoint", ASCENDING), ("timestamp", DESCENDING)])
+        
+        # Index pour api_metrics
+        self.api_metrics.create_index([("timestamp", DESCENDING)])
+        self.api_metrics.create_index([("endpoint", ASCENDING), ("metric_type", ASCENDING), ("timestamp", DESCENDING)])
 
     def store_market_data(self, symbol: str, data: Dict[str, Any]):
         """
@@ -205,22 +217,48 @@ class MongoDBManager:
             
             # Validate and prepare documents
             documents = []
-            for indicator_data in indicators_list:
-                if not isinstance(indicator_data, dict) or 'symbol' not in indicator_data or 'indicators' not in indicator_data:
-                    raise ValueError("Invalid indicator data format")
+            for indicators in indicators_list:
+                if not isinstance(indicators, dict) or 'symbol' not in indicators or 'indicators' not in indicators:
+                    raise ValueError("Invalid indicators format")
                 
                 document = {
-                    "symbol": indicator_data['symbol'],
+                    "symbol": indicators['symbol'],
                     "timestamp": datetime.now(),
-                    "indicators": indicator_data['indicators']
+                    "indicators": indicators['indicators']
                 }
                 documents.append(document)
             
             # Insert documents in bulk
             result = self.indicators.insert_many(documents)
-            self.logger.info(f"Stored {len(result.inserted_ids)} indicator documents")
+            self.logger.info(f"Stored {len(result.inserted_ids)} indicators documents")
         except Exception as e:
             self.logger.error(f"Error storing indicators in bulk: {str(e)}")
+            raise
+
+    def store_monitoring_data(self, monitoring_data: Dict[str, Any]):
+        """
+        Stocke les données de monitoring
+        :param monitoring_data: Données de monitoring à stocker
+        """
+        try:
+            monitoring_data["timestamp"] = datetime.now()
+            self.monitoring.insert_one(monitoring_data)
+            self.logger.debug(f"Stored monitoring data for endpoint {monitoring_data.get('endpoint')}")
+        except Exception as e:
+            self.logger.error(f"Error storing monitoring data: {str(e)}")
+            raise
+
+    def store_api_metrics(self, metric_data: Dict[str, Any]):
+        """
+        Stocke les métriques de l'API
+        :param metric_data: Données de métriques à stocker
+        """
+        try:
+            metric_data["timestamp"] = datetime.now()
+            self.api_metrics.insert_one(metric_data)
+            self.logger.debug(f"Stored API metrics for endpoint {metric_data.get('endpoint')}")
+        except Exception as e:
+            self.logger.error(f"Error storing API metrics: {str(e)}")
             raise
 
     def get_latest_market_data(self, symbol: str) -> Optional[Dict[str, Any]]:

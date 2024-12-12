@@ -96,21 +96,11 @@ class MarketDataCollector:
             # Récupérer les données historiques
             df = self.get_klines(symbol, interval, limit)
             
-            # Calculer les indicateurs techniques
-            indicators = self.technical_analyzer.calculate_all(df)
+            # Obtenir l'analyse complète
+            analysis = self.technical_analyzer.get_summary(df)
             
-            # Obtenir les signaux de trading
-            signals = self.technical_analyzer.get_signals(df)
+            return analysis
             
-            # Obtenir le résumé de l'analyse
-            summary = self.technical_analyzer.get_summary(df)
-            
-            return {
-                'indicators': indicators,
-                'signals': signals,
-                'summary': summary,
-                'last_update': datetime.now().isoformat()
-            }
         except Exception as e:
             self.logger.error(f"Error performing technical analysis for {symbol}: {str(e)}")
             raise
@@ -126,12 +116,16 @@ class MarketDataCollector:
             technical_analysis = self.get_technical_analysis(symbol)
             order_book = self.get_order_book(symbol)
             
-            return {
+            analysis = {
                 'current_price': current_price,
                 'technical_analysis': technical_analysis,
                 'order_book': order_book,
                 'timestamp': datetime.now().isoformat()
             }
+            
+            self.logger.info(f"Market analysis completed for {symbol}")
+            return analysis
+            
         except Exception as e:
             self.logger.error(f"Error performing market analysis for {symbol}: {str(e)}")
             raise
