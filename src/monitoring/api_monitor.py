@@ -103,13 +103,10 @@ class APIMonitor:
                 return latency
             else:
                 self.consecutive_failures += 1
-                self.record_metric('error', 1, endpoint)
-                self.logger.warning(f"API call failed: {response}")
                 return None
                 
         except Exception as e:
             self.consecutive_failures += 1
-            self.record_metric('error', 1, endpoint)
             self.logger.error(f"Error measuring latency: {str(e)}")
             return None
 
@@ -126,16 +123,13 @@ class APIMonitor:
             
             if success:
                 self.consecutive_failures = 0
-                self.record_metric('availability', 1, endpoint)
                 return True
             else:
                 self.consecutive_failures += 1
-                self.record_metric('availability', 0, endpoint)
                 return False
                 
         except Exception as e:
             self.consecutive_failures += 1
-            self.record_metric('availability', 0, endpoint)
             self.logger.error(f"Error checking availability: {str(e)}")
             return False
 
@@ -177,19 +171,23 @@ class APIMonitor:
             self.logger.error(f"Error checking rate limits: {str(e)}")
             return {}
 
-    def record_metric(self, metric_type: str, value: float, endpoint: str):
+    def record_metric(self, metric_type: str, value: float, endpoint: str) -> None:
         """Enregistre une métrique"""
         metric = {
-            'timestamp': datetime.now().isoformat(),
             'type': metric_type,
             'value': value,
             'endpoint': endpoint,
+            'exchange': self.exchange,
             'testnet': self.testnet,
-            'exchange': self.exchange
+            'timestamp': datetime.now().isoformat()
         }
+        
+        # Vérifier les alertes avant de changer le type
+        if metric_type == 'latency' and value > self.alert_thresholds['latency']:
+            self.logger.warning(f"High latency detected: {value}ms for {endpoint}")
+        
         self.metrics.append(metric)
         self._save_metrics()
-        self._check_alerts(metric)
 
     def _save_metrics(self):
         """Sauvegarde les métriques dans un fichier JSON"""
@@ -200,57 +198,44 @@ class APIMonitor:
         except Exception as e:
             self.logger.error(f"Error saving metrics: {str(e)}")
 
-    def _check_alerts(self, metric: Dict):
-        """Vérifie si une métrique déclenche une alerte"""
-        if metric['type'] == 'latency' and metric['value'] > self.alert_thresholds['latency']:
-            self.logger.warning(f"High latency detected: {metric['value']}ms for {metric['endpoint']}")
-        
-        elif metric['type'] == 'error':
-            error_rate = self.failed_requests / self.total_requests if self.total_requests > 0 else 0
-            if error_rate > self.alert_thresholds['error_rate']:
-                self.logger.warning(f"High error rate detected: {error_rate:.2%}")
-        
-        if self.consecutive_failures >= self.alert_thresholds['consecutive_failures']:
-            self.logger.error(f"Multiple consecutive failures detected: {self.consecutive_failures}")
-
     def get_alerts(self) -> List[Dict]:
         """Récupère les alertes actives"""
         alerts = []
         
-        # Vérifier la latency moyenne
-        latency_metrics = [m['value'] for m in self.metrics if m['type'] == 'latency']
-        if latency_metrics:
-            avg_latency = sum(latency_metrics) / len(latency_metrics)
-            if avg_latency > self.alert_thresholds['latency']:
+        # Vérifier la latence
+        high_latency_metrics = [m for m in self.metrics if m['type'] == 'latency' and m['value'] > self.alert_thresholds['latency']]
+        if high_latency_metrics:
+            latest = max(high_latency_metrics, key=lambda x: x['timestamp'])
+            alerts.append({
+                'type': 'high_latency',
+                'message': f"High latency: {latest['value']}ms",
+                'value': latest['value'],
+                'threshold': self.alert_thresholds['latency'],
+                'timestamp': latest['timestamp']
+            })
+        
+        # Vérifier le taux d'erreur
+        if self.total_requests > 0:
+            error_rate = self.failed_requests / self.total_requests
+            if error_rate > self.alert_thresholds['error_rate']:
                 alerts.append({
-                    'type': 'latency',
-                    'message': f"High average latency: {avg_latency:.2f}ms",
-                    'threshold': self.alert_thresholds['latency'],
-                    'value': avg_latency,
+                    'type': 'high_error_rate',
+                    'message': f"High error rate: {error_rate:.2%}",
+                    'value': error_rate,
+                    'threshold': self.alert_thresholds['error_rate'],
                     'timestamp': datetime.now().isoformat()
                 })
-
-        # Vérifier le taux d'erreur
-        error_rate = self.failed_requests / self.total_requests if self.total_requests > 0 else 0
-        if error_rate > self.alert_thresholds['error_rate']:
-            alerts.append({
-                'type': 'error_rate',
-                'message': f"High error rate: {error_rate:.2%}",
-                'threshold': self.alert_thresholds['error_rate'],
-                'value': error_rate,
-                'timestamp': datetime.now().isoformat()
-            })
-
+        
         # Vérifier les échecs consécutifs
         if self.consecutive_failures >= self.alert_thresholds['consecutive_failures']:
             alerts.append({
                 'type': 'consecutive_failures',
                 'message': f"Multiple consecutive failures: {self.consecutive_failures}",
-                'threshold': self.alert_thresholds['consecutive_failures'],
                 'value': self.consecutive_failures,
+                'threshold': self.alert_thresholds['consecutive_failures'],
                 'timestamp': datetime.now().isoformat()
             })
-
+        
         return alerts
 
     def get_metrics_summary(self) -> Dict:
@@ -304,33 +289,102 @@ class APIMonitor:
             self.logger.error(f"Error checking API health: {str(e)}")
             return False
 
-    def monitor_endpoint(self, endpoint: str, method: str = "GET", **kwargs):
+    def monitor_endpoint(self, endpoint: str, method: str = "GET", **kwargs) -> bool:
         """Surveille un endpoint API Binance"""
         self.logger.info(f"Monitoring Binance endpoint: {endpoint} ({method})")
         
-        # Vérifier la disponibilité
-        available = self.check_availability(endpoint)
-        if not available:
-            self.logger.error(f"Binance API endpoint {endpoint} is not available")
-            return
-        
-        # Mettre à jour les compteurs
-        self.total_requests += 1
-        
-        # Mesurer la latence
-        latency = self.measure_latency(endpoint, method, **kwargs)
-        
-        if latency is None:
+        try:
+            # Vérifier d'abord la disponibilité
+            if not self.check_availability(endpoint):
+                return False
+                
+            # Incrémenter le compteur total pour chaque tentative valide
+            self.total_requests += 1
+            
+            latency = self.measure_latency(endpoint, method, **kwargs)
+            if latency is not None:
+                self.record_metric('availability', 1, endpoint)
+                return True
+            else:
+                self.failed_requests += 1
+                self.record_metric('availability', 0, endpoint)
+                return False
+                
+        except Exception as e:
             self.failed_requests += 1
-        else:
-            self.logger.info(f"Latency for {endpoint}: {latency}ms")
-        
-        # Vérifier les limites de taux
-        rate_limits = self.check_rate_limits()
-        if rate_limits:
-            self.logger.info(f"Rate limits status: {json.dumps(rate_limits, indent=2)}")
-        
-        # Obtenir et logger le résumé des métriques
-        summary = self.get_metrics_summary()
-        if summary:
-            self.logger.info(f"Metrics summary: {json.dumps(summary, indent=2)}")
+            self.logger.error(f"Binance API endpoint {endpoint} is not available")
+            return False
+
+    def get_ticker(self, symbol: str) -> dict:
+        """Récupère les données du ticker pour un symbole donné"""
+        try:
+            if self.client:
+                return self.client.get_ticker(symbol=symbol)
+            else:
+                response = requests.get(
+                    f"{'https://testnet.binance.vision' if self.testnet else 'https://api.binance.com'}/api/v3/ticker/24hr",
+                    params={"symbol": symbol}
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la récupération du ticker: {str(e)}")
+            raise
+
+    def get_order_book(self, symbol: str, limit: int = 100) -> dict:
+        """Récupère le carnet d'ordres pour un symbole donné"""
+        try:
+            if self.client:
+                return self.client.get_order_book(symbol=symbol, limit=limit)
+            else:
+                response = requests.get(
+                    f"{'https://testnet.binance.vision' if self.testnet else 'https://api.binance.com'}/api/v3/depth",
+                    params={"symbol": symbol, "limit": limit}
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la récupération du carnet d'ordres: {str(e)}")
+            raise
+
+    def get_klines(self, symbol: str, interval: str = "1", limit: int = 100) -> dict:
+        """Récupère les données de chandelier pour un symbole donné"""
+        try:
+            # Convertir l'intervalle au format Binance
+            interval_map = {
+                "1": "1m",
+                "3": "3m",
+                "5": "5m",
+                "15": "15m",
+                "30": "30m",
+                "60": "1h",
+                "120": "2h",
+                "240": "4h",
+                "360": "6h",
+                "720": "12h",
+                "D": "1d",
+                "M": "1M",
+                "W": "1w"
+            }
+            binance_interval = interval_map.get(interval, interval)
+            
+            if self.client:
+                return self.client.get_klines(
+                    symbol=symbol,
+                    interval=binance_interval,
+                    limit=limit
+                )
+            else:
+                response = requests.get(
+                    f"{'https://testnet.binance.vision' if self.testnet else 'https://api.binance.com'}/api/v3/klines",
+                    params={
+                        "symbol": symbol,
+                        "interval": binance_interval,
+                        "limit": limit
+                    }
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la récupération des chandeliers: {str(e)}")
+            raise

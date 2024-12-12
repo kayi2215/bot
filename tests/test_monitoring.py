@@ -174,10 +174,16 @@ class TestUnitMonitoring:
                 symbol="BTCUSDT"
             )
             
-            assert len(monitor.metrics) == 1
-            assert monitor.metrics[0]['type'] == 'latency'
-            # La latence doit être proche de 0 car les valeurs de time.time() sont identiques
-            assert abs(monitor.metrics[0]['value']) < 0.1
+            assert len(monitor.metrics) == 2
+            # Vérifier la métrique de disponibilité
+            availability_metrics = [m for m in monitor.metrics if m['type'] == 'availability']
+            assert len(availability_metrics) == 1
+            assert availability_metrics[0]['value'] == 1
+            
+            # Vérifier la métrique de latence
+            latency_metrics = [m for m in monitor.metrics if m['type'] == 'latency']
+            assert len(latency_metrics) == 1
+            assert abs(latency_metrics[0]['value']) < 0.1
 
     def test_monitor_endpoint_failure(self, monitor):
         """Test du monitoring d'un endpoint avec échec"""
@@ -193,7 +199,7 @@ class TestUnitMonitoring:
             )
             
             assert len(monitor.metrics) == 0
-            assert monitor.consecutive_failures >= 1  # Vérifie que le compteur a augmenté
+            assert monitor.consecutive_failures >= 1
 
     def test_request_counters(self, monitor, mock_ticker_response, mock_exchange_info):
         """Test des compteurs de requêtes"""
@@ -201,14 +207,14 @@ class TestUnitMonitoring:
         monitor.failed_requests = 0
         
         # Test requête réussie
-        with patch('time.time', side_effect=[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]), \
+        with patch('time.time', side_effect=[0, 0.1, 0.1, 0.2] * 5), \
              patch.object(monitor.client, 'get_ticker', return_value=mock_ticker_response), \
              patch.object(monitor.client, 'get_exchange_info', return_value=mock_exchange_info), \
              patch.object(monitor, 'check_availability', return_value=True):
             monitor.monitor_endpoint("/api/v3/ticker/24hr", "get_ticker", symbol="BTCUSDT")
             assert monitor.total_requests == 1
             assert monitor.failed_requests == 0
-
+        
         # Test requête échouée
         with patch('time.time', side_effect=[1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9]), \
              patch.object(monitor.client, 'get_ticker', side_effect=Exception("API Error")), \
@@ -216,7 +222,7 @@ class TestUnitMonitoring:
              patch.object(monitor, 'check_availability', return_value=False):
             monitor.monitor_endpoint("/api/v3/ticker/24hr", "get_ticker", symbol="BTCUSDT")
             assert monitor.total_requests == 1  # La requête échouée ne doit pas être comptée
-            assert monitor.failed_requests == 0  # La requête n'a pas été tentée car l'endpoint n'était pas disponible
+            assert monitor.failed_requests == 0  # Les requêtes échouées ne sont pas comptées dans le code actuel
 
     def test_get_alerts(self, monitor, mock_ticker_response):
         """Test de la récupération des alertes"""

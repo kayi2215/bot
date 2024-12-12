@@ -1,5 +1,5 @@
 import threading
-from src.monitoring.api_monitor import APIMonitor
+from api_monitor import APIMonitor
 import time
 import logging
 import signal
@@ -18,9 +18,11 @@ class MonitoringService:
         load_dotenv()
         self.monitor = APIMonitor(testnet=testnet)
         self.check_interval = check_interval
+        self.stop_event = threading.Event()
         self.running = False
         self.last_metrics_summary = datetime.now()
         self.metrics_summary_interval = 300  # 5 minutes
+        self.shutdown_complete = threading.Event()  # Nouvel événement pour la synchronisation
         
         # Configuration des endpoints Binance à surveiller
         self.endpoints = [
@@ -37,7 +39,7 @@ class MonitoringService:
             {
                 "endpoint": "/api/v3/klines",
                 "method": "get_klines",
-                "params": {"symbol": "BTCUSDT", "interval": "1m", "limit": 100}
+                "params": {"symbol": "BTCUSDT", "interval": "1", "limit": 100}  # Harmonisé avec Bybit
             }
         ]
         
@@ -62,7 +64,7 @@ class MonitoringService:
         # Handler pour le fichier
         log_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'logs')
         os.makedirs(log_dir, exist_ok=True)
-        fh = logging.FileHandler(os.path.join(log_dir, 'monitoring_service.log'))
+        fh = logging.FileHandler(os.path.join(log_dir, 'binance_monitoring_service.log'))
         fh.setLevel(logging.INFO)
         fh.setFormatter(formatter)
         self.logger.addHandler(fh)
@@ -70,7 +72,7 @@ class MonitoringService:
     def signal_handler(self, signum, frame):
         """Gestionnaire pour l'arrêt propre du service"""
         self.logger.info("\nArrêt du service de monitoring Binance...")
-        self.running = False
+        self.stop()
 
     def should_check_endpoint(self, endpoint: str) -> bool:
         """Vérifie si un endpoint doit être testé en fonction de son dernier check"""
@@ -98,77 +100,88 @@ class MonitoringService:
 
     def print_metrics_summary(self):
         """Affiche un résumé des métriques"""
-        summary = self.monitor.get_metrics_summary()
+        metrics = self.monitor.get_metrics_summary()
         self.logger.info("\n=== Résumé des Métriques ===")
-        self.logger.info(f"Requêtes totales: {summary['total_requests']}")
-        self.logger.info(f"Requêtes échouées: {summary['failed_requests']}")
-        self.logger.info(f"Taux d'erreur: {summary['error_rate']:.2%}")
-        if 'avg_latency' in summary:
-            self.logger.info(f"Latence moyenne: {summary['avg_latency']:.2f}ms")
-            self.logger.info(f"Latence min: {summary['min_latency']:.2f}ms")
-            self.logger.info(f"Latence max: {summary['max_latency']:.2f}ms")
+        for endpoint, data in metrics.items():
+            self.logger.info(f"\nEndpoint: {endpoint}")
+            self.logger.info(f"Latence moyenne: {data['avg_latency']:.2f}ms")
+            self.logger.info(f"Taux de succès: {data['success_rate']:.1f}%")
+            self.logger.info(f"Nombre d'erreurs: {data['error_count']}")
 
     def run(self):
-        """Lance le service de monitoring en continu"""
-        self.running = True
-        
-        # Configuration du gestionnaire de signal pour Ctrl+C
-        signal.signal(signal.SIGINT, self.signal_handler)
-        
-        self.logger.info(f"Service de monitoring Binance démarré - Intervalle de vérification: {self.check_interval}s")
-        self.logger.info("Appuyez sur Ctrl+C pour arrêter le service")
-        
-        while self.running:
-            try:
-                # Vérification de la disponibilité générale de l'API
-                if not self.monitor.check_availability():
-                    self.logger.error("L'API Binance n'est pas disponible!")
-                    time.sleep(self.check_interval)
-                    continue
+        """Lance la boucle principale du service de monitoring"""
+        try:
+            self.logger.info("Démarrage du service de monitoring Binance...")
+            self.running = True
+            
+            while not self.stop_event.is_set():
+                try:
+                    # Vérification des endpoints
+                    for endpoint_config in self.endpoints:
+                        if self.stop_event.is_set():
+                            break
+                            
+                        endpoint = endpoint_config["endpoint"]
+                        if self.should_check_endpoint(endpoint):
+                            self.logger.info(f"Vérification de l'endpoint: {endpoint}")
+                            start_time = time.time()
+                            
+                            try:
+                                method = getattr(self.monitor, endpoint_config["method"])
+                                method(**endpoint_config["params"])
+                                
+                                latency = (time.time() - start_time) * 1000
+                                self.logger.info(f"Latence pour {endpoint}: {latency:.2f}ms")
+                                
+                            except Exception as e:
+                                self.logger.error(f"Erreur lors de la vérification de {endpoint}: {str(e)}")
+                    
+                    # Vérification et affichage des alertes
+                    self.check_alerts()
+                    
+                    # Affichage périodique du résumé des métriques
+                    if self.should_print_metrics_summary():
+                        self.print_metrics_summary()
+                    
+                    time.sleep(1)  # Pause courte pour éviter une utilisation excessive du CPU
+                    
+                except Exception as e:
+                    self.logger.error(f"Erreur dans la boucle principale: {str(e)}")
+                    time.sleep(5)  # Pause plus longue en cas d'erreur
+                    
+        except KeyboardInterrupt:
+            self.logger.info("Interruption détectée, arrêt du service...")
+        finally:
+            self.running = False
+            self.shutdown_complete.set()
 
-                # Vérification des endpoints
-                for endpoint_config in self.endpoints:
-                    endpoint = endpoint_config["endpoint"]
-                    if self.should_check_endpoint(endpoint):
-                        self.logger.info(f"Vérification de l'endpoint: {endpoint}")
-                        
-                        # Mesure de la latence
-                        latency = self.monitor.measure_latency(
-                            endpoint=endpoint,
-                            method=endpoint_config["method"],
-                            **endpoint_config["params"]
-                        )
-                        
-                        if latency is not None:
-                            self.logger.info(f"Latence pour {endpoint}: {latency:.2f}ms")
-                        
-                        # Vérification des limites de taux
-                        rate_limits = self.monitor.check_rate_limits()
-                        if rate_limits.get('status') == 'CRITICAL':
-                            self.logger.warning(f"Attention: Utilisation des limites de taux à {rate_limits.get('usage_percent', 0):.1f}%")
-                
-                # Vérification des alertes
-                self.check_alerts()
-                
-                # Affichage périodique du résumé des métriques
-                if self.should_print_metrics_summary():
-                    self.print_metrics_summary()
-                
-                time.sleep(1)  # Petite pause pour éviter une utilisation excessive du CPU
-                
-            except Exception as e:
-                self.logger.error(f"Erreur dans le service de monitoring: {str(e)}")
-                time.sleep(self.check_interval)
+    def stop(self):
+        """Arrête proprement le service de monitoring"""
+        self.logger.info("Arrêt du service de monitoring...")
+        self.stop_event.set()
+        
+        # Attente de l'arrêt complet avec timeout
+        if not self.shutdown_complete.wait(timeout=5):
+            self.logger.warning("Le service ne s'est pas arrêté dans le délai imparti")
+        else:
+            self.logger.info("Service arrêté avec succès")
+
 
 def main():
-    """Point d'entrée principal"""
-    # Paramètres par défaut
-    check_interval = int(os.getenv('MONITORING_INTERVAL', '60'))  # 60 secondes par défaut
-    testnet = os.getenv('USE_TESTNET', 'true').lower() == 'true'  # Testnet par défaut
+    """Point d'entrée principal du service de monitoring"""
+    # Configuration du logging au niveau racine
+    logging.basicConfig(level=logging.INFO)
     
     # Création et démarrage du service
-    service = MonitoringService(check_interval=check_interval, testnet=testnet)
+    service = MonitoringService()
+    
+    # Configuration du gestionnaire de signal
+    signal.signal(signal.SIGINT, service.signal_handler)
+    signal.signal(signal.SIGTERM, service.signal_handler)
+    
+    # Démarrage du service
     service.run()
+
 
 if __name__ == "__main__":
     main()
